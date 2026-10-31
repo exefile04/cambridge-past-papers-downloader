@@ -26,13 +26,13 @@ Works for **A Level / AS Level, IGCSE (including 9-1) and O Level**, on Windows,
 To install them yourself:
 
 ```bash
-pip install -r requirements.txt
+pip install requests pypdf
 ```
 
 ## Quick start
 
 ```bash
-git clone https://github.com/exefile04/cambridge-past-papers-downloader.git
+git clone https://github.com/<your-username>/cambridge-past-papers-downloader.git
 cd cambridge-past-papers-downloader
 python download_papers.py
 ```
@@ -41,15 +41,14 @@ On Windows you can also just double-click `download_papers.py`.
 
 The script will ask you:
 
-1. Choose what to download now, or use the saved settings in the script
-2. Level (A Level, IGCSE, O Level)
-3. Subject (pick a number, search by word like `phys`, or type an address like `physics-9702`)
-4. Years (e.g. `2023`, `2019-2024`, `2019,2021,2023`)
-5. Exam sessions
-6. File types (question papers, mark schemes, …)
-7. Specific papers (optional)
-8. Whether to merge into bookmarked PDFs
-9. Where to save
+1. Level (A Level, IGCSE, O Level)
+2. Subject (pick a number, search by word like `phys`, or type an address like `physics-9702`)
+3. Years (e.g. `2023`, `2019-2024`, `2019,2021,2023`)
+4. Exam sessions
+5. File types (question papers, mark schemes, …)
+6. Specific papers (optional)
+7. Whether to merge into bookmarked PDFs
+8. Where to save
 
 ## Command-line usage
 

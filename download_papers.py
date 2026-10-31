@@ -1,28 +1,11 @@
-"""
-Past paper downloader + compiler for bestexamhelp.com   (v5)
---------------------------------------------------------------
-Just run:   python download_papers.py          (it asks you what you want)
-
-Handy extras:
-    python download_papers.py --help           all command-line options
-    python download_papers.py --subject physics-9702 --years 2019-2024 --types qp,ms --yes
-    python download_papers.py --saved --dry-run    show what WOULD be downloaded, download nothing
-    python download_papers.py --self-test          run the built-in tests (no internet needed)
-
-What it does:
-  1. Checks the Python libraries it needs (and asks before installing anything).
-  2. Reads the site's listing page for every subject + year to see EXACTLY what exists.
-  3. Shows a plan (file counts, rough time) and asks before it starts.
-  4. Downloads in parallel into  papers/<Subject code>/<year>/  . Files are written safely
-     (never half-finished), and anything incomplete is re-downloaded next run.
-  5. Prints a summary, saves failed_links.txt if anything failed, and can merge each subject
-     into bookmarked PDFs.
-
-Please be kind to the site: it's a free educational service. Keep the delays/workers modest
-and don't re-run huge downloads needlessly (files you already have are skipped).
-Check the site's terms of use for what's allowed.
-Needs Python 3.9 or newer.
-"""
+# download_papers.py
+# grabs cambridge past papers from bestexamhelp.com and (optionally) merges them into one pdf
+#
+# usage:  python download_papers.py              -> asks what you want
+#         python download_papers.py --help       -> all the options
+#         python download_papers.py --self-test  -> run the tests (offline)
+#
+# please don't hammer the site, it's free. needs python 3.9+
 
 import argparse
 import datetime
@@ -42,13 +25,9 @@ from typing import Optional
 if sys.version_info < (3, 9):
     sys.exit("This script needs Python 3.9 or newer.")
 
-# =====================================================================
-# STEP 0: make sure required libraries are installed (asks first)
-# =====================================================================
-# Format:  "import name": "pip package name"
 REQUIRED_PACKAGES = {
-    "requests": "requests",   # downloading
-    "pypdf": "pypdf",         # merging PDFs
+    "requests": "requests",
+    "pypdf": "pypdf",
 }
 
 
@@ -83,41 +62,25 @@ def ensure_packages() -> None:
 
 ensure_packages()
 
-import requests                      # noqa: E402  (imported after the install check)
-from pypdf import PdfReader, PdfWriter   # noqa: E402
+import requests  # noqa: E402  (has to come after ensure_packages)
+from pypdf import PdfReader, PdfWriter  # noqa: E402
 
-# =====================================================================
-# CONFIG: edit this section to customize
-# =====================================================================
+# ---------------- settings ----------------
 
-# --- Questions on start-up ----------------------------------------
-# True  = when you run the script it ASKS you what to download (subject, years, sessions,
-#         file types, papers, merging...). You can also pick "use the saved settings" there.
-# False = skip all questions and just use the settings below.
-INTERACTIVE = True
+INTERACTIVE = True   # False = don't ask anything, just use SUBJECTS below
 
-THIS_YEAR = datetime.date.today().year   # "end_year": THIS_YEAR always means "up to now"
+THIS_YEAR = datetime.date.today().year
 
-# --- Saved subjects (used when INTERACTIVE = False, or you choose "saved settings") ---
-# One entry per syllabus code. To add a subject, copy an entry and change it.
-# All the pieces come from the subject's address on the site, e.g.
-#   https://bestexamhelp.com/exam/cambridge-international-a-level/physics-9702/2023/...
-#                                 \________ level _____________/ \_ slug _/
-# Levels:  "cambridge-international-a-level"  |  "cambridge-igcse"
-#          "cambridge-igcse-9-1"              |  "cambridge-o-level"
-# Browse https://bestexamhelp.com/exam/index.php to find a subject's slug and code.
-#
-#   name        any label you like, used for the folder name
-#   start_year / end_year   years to look at (years the site doesn't have are skipped)
-#   compile     True = also merge this subject into bookmarked PDFs when done
-#               (big subjects like Physics/Maths make HUGE files, so they're off by default)
+# subjects for --saved mode. slug/level come from the url on the site, e.g.
+# bestexamhelp.com/exam/cambridge-international-a-level/physics-9702/2023/
+# compile=True merges it into bookmarked pdfs at the end (physics/maths get huge so off)
 SUBJECTS = [
     {
         "name": "Computer Science",
         "level": "cambridge-international-a-level",
         "slug": "computer-science-9618",
         "code": "9618",
-        "start_year": 2021,      # 2021 had BOTH 9618 (new) and 9608 (old)
+        "start_year": 2021,      # 2021 had both 9618 and old 9608
         "end_year": THIS_YEAR,
         "compile": True,
     },
@@ -150,47 +113,29 @@ SUBJECTS = [
     },
 ]
 
-# --- What to download ----------------------------------------------
-# qp = question paper     ms = mark scheme       er = examiner report
-# gt = grade threshold    in = insert            sf = source files
-# ci = confidential instructions (practical exams, e.g. Physics)
+# qp ms er gt in sf ci  (question paper, mark scheme, examiner report, grade threshold,
+# insert, source files, confidential instructions)
 TYPES = ["qp", "ms", "er", "gt"]
+ONLY_PAPERS = []     # e.g. [31] or [3] for all paper 3x. empty = all
+ONLY_SESSIONS = []   # m / s / w. empty = all
 
-# Optional: only certain paper numbers (empty = everything the site lists).
-# 31 = exactly paper 31, 3 = every paper 3x (31, 32, 33). Reports/thresholds are always kept.
-ONLY_PAPERS = []
-
-# Optional: only these sessions (empty = whatever exists). m = Feb/March, s = May/June, w = Oct/Nov
-ONLY_SESSIONS = []
-
-# --- Output --------------------------------------------------------
-# Everything is created next to this script file, wherever you launch it from.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SKIP_EXISTING = True             # skip files you already have (incomplete ones are re-downloaded)
+SKIP_EXISTING = True
 
-# --- Speed & network behaviour ------------------------------------
-WORKERS = 4                      # files downloaded at the same time (1-8). Higher = faster, but
-                                 # more likely to be blocked. If you get blocked, lower this.
-DELAY_SECONDS = 0.3              # small pause before each request, per worker
-RETRIES = 3                      # tries per file before giving up
-RETRY_WAIT = 2                   # seconds before the 2nd try (4s before the 3rd, ...)
-MAX_CONSECUTIVE_FAILS = 5        # if this many downloads IN A ROW fail (not counting files
-                                 # that simply don't exist on the server), stop early and
-                                 # write failed_links.txt so you can finish in your browser
+WORKERS = 4          # more = faster but the site blocks you quicker
+DELAY_SECONDS = 0.3
+RETRIES = 3
+RETRY_WAIT = 2
+MAX_CONSECUTIVE_FAILS = 5   # probably blocked if this many fail in a row
 
-# --- Compiling -----------------------------------------------------
-NEWEST_FIRST = True              # True: 2026 -> 2015, False: 2015 -> 2026
-OPEN_WHEN_DONE = "files"         # "files" = open compiled PDFs, "folder" = open the folder, "none"
-MAX_FILES_PER_COMPILED = 400     # big subjects are split into several merged PDFs of about this
-                                 # many files each (keeps memory use and file size sane)
+NEWEST_FIRST = True
+OPEN_WHEN_DONE = "files"    # "files", "folder" or "none"
+MAX_FILES_PER_COMPILED = 400
 
-# =====================================================================
-# END OF CONFIG: you shouldn't need to edit below this line
-# =====================================================================
+# -------------------------------------------
 
 SITE_DEFAULT = "https://bestexamhelp.com"
 
-# This User-Agent + Referer combination was tested and works on the site.
 BASE_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) "
                    "Gecko/20100101 Firefox/128.0"),
@@ -201,7 +146,6 @@ SESSION_ORDER = {"m": 0, "s": 1, "w": 2}
 TYPE_NAMES = {"qp": "Question Paper", "ms": "Mark Scheme", "er": "Examiner Report",
               "gt": "Grade Threshold", "in": "Insert", "sf": "Source Files",
               "ci": "Confidential Instructions"}
-# order inside a session in the compiled PDF (after the paper number): qp, then its ms, ...
 TYPE_ORDER = {"qp": 0, "ms": 1, "in": 2, "sf": 3, "ci": 4, "er": 5, "gt": 6}
 LEVEL_CODES = {"a-level": "cambridge-international-a-level", "igcse": "cambridge-igcse",
                "igcse-9-1": "cambridge-igcse-9-1", "o-level": "cambridge-o-level"}
@@ -214,9 +158,6 @@ def log(msg: str = "") -> None:
         print(msg, flush=True)
 
 
-# ---------------------------------------------------------------------
-# Settings (one object instead of scattered global variables)
-# ---------------------------------------------------------------------
 @dataclass
 class Settings:
     site: str = SITE_DEFAULT
@@ -249,11 +190,7 @@ class Settings:
         return self.site + "/"
 
 
-# ---------------------------------------------------------------------
-# Networking: reused connections, retries, adaptive slow-down
-# ---------------------------------------------------------------------
 def pdf_complete(r) -> bool:
-    """True only for a complete PDF response (not an HTML error page, not cut off)."""
     if r.status_code != 200:
         return False
     body = r.content
@@ -266,7 +203,6 @@ def pdf_complete(r) -> bool:
 
 
 def file_ok(path: str) -> bool:
-    """True if a file on disk looks like a complete PDF (starts with %PDF, ends with %%EOF)."""
     try:
         size = os.path.getsize(path)
         if size < 200:
@@ -281,15 +217,12 @@ def file_ok(path: str) -> bool:
 
 
 class Client:
-    """HTTP helper. One connection pool per thread (fast), cookies wiped before every
-    request (so nothing sticks between files), and it slows itself down when the site
-    starts refusing requests."""
 
     def __init__(self, cfg: Settings):
         self.cfg = cfg
         self.local = threading.local()
-        self.slow = 0.0                      # extra seconds added before each request
-        self.stop = threading.Event()        # set to cancel everything
+        self.slow = 0.0
+        self.stop = threading.Event()
 
     def _session(self):
         s = getattr(self.local, "session", None)
@@ -306,10 +239,6 @@ class Client:
         self.slow = min(self.slow * 2 + 0.5, 8.0)
 
     def get(self, url: str, is_ok, referers: list):
-        """GET with retries. Returns (response_or_None, error_text).
-        A 404 is final ('really doesn't exist') and not retried. Each retry claims a
-        different origin, because the site sometimes answers with its homepage if it doesn't
-        like where a request 'came from'."""
         cfg = self.cfg
         r, err = None, ""
         for attempt in range(1, cfg.retries + 1):
@@ -320,6 +249,8 @@ class Client:
             ref = referers[(attempt - 1) % len(referers)]
             session = self._session()
             session.cookies.clear()
+            # site sometimes sends the homepage instead of the file depending on referer,
+            # so try a different one each attempt
             try:
                 r = session.get(url, headers={"Referer": ref}, timeout=(10, 40))
                 err = ""
@@ -333,20 +264,15 @@ class Client:
 
 
 def paper_page_of(pdf_url: str) -> str:
-    """The web page that links to a PDF, e.g. .../9618_s22_ms_31.pdf -> .../9618-s22-ms-31.php"""
     head, name = pdf_url.rsplit("/", 1)
     return head + "/" + name.replace("_", "-").replace(".pdf", ".php")
 
 
-# ---------------------------------------------------------------------
-# Names
-# ---------------------------------------------------------------------
 _SMALL_WORDS = {"and", "of", "in", "the"}
 _ACRONYMS = {"us": "(US)", "ict": "ICT", "aict": "AICT"}
 
 
 def pretty_name(base: str) -> str:
-    """'english-first-language-us' -> 'English First Language (US)'"""
     words = []
     for i, w in enumerate(base.split("-")):
         if w in _ACRONYMS:
@@ -359,7 +285,6 @@ def pretty_name(base: str) -> str:
 
 
 def pdf_name(code: str, sess: str, year: int, typ: str, num) -> str:
-    """e.g. 9618_w25_ms_32.pdf  (er/gt have no paper number: 9618_w25_er.pdf)"""
     base = f"{code}_{sess}{year % 100:02d}_{typ}"
     return f"{base}_{num}.pdf" if num else f"{base}.pdf"
 
@@ -369,29 +294,18 @@ def subject_folder(subject: dict) -> str:
 
 
 def subject_years(subject: dict) -> list:
-    """The years to process: an explicit list ('years') or the start_year..end_year range."""
     if subject.get("years"):
         return sorted(subject["years"])
     return list(range(subject["start_year"], subject["end_year"] + 1))
 
 
 def paper_wanted(cfg: Settings, n) -> bool:
-    """ONLY_PAPERS filter. 31 = exactly paper 31; 3 = every paper 3x. Reports/thresholds always pass."""
     if n is None or not cfg.only_papers:
         return True
     return n in cfg.only_papers or n // 10 in cfg.only_papers
 
 
-# ---------------------------------------------------------------------
-# Discovery: read each year's listing page to see what really exists
-# ---------------------------------------------------------------------
 def discover(client: Client, cfg: Settings, subject: dict, year: int):
-    """Returns (status, items, detail). status is one of:
-       ok          listing loaded; items = [(session, type, paper_number_or_None), ...]
-       missing     the site says 404 (year not available)
-       unavailable page loaded but it's not the listing (year not on the site, or blocked)
-       layout      listing loaded but no links found (the site layout may have changed)
-       network     couldn't reach the site at all"""
     base = f"{cfg.site}/exam/{subject['level']}/{subject['slug']}/{year}/"
     marker = f"Year {year}".encode()
     r, err = client.get(base, lambda x: x.status_code == 200 and marker in x.content, [cfg.home, ""])
@@ -403,6 +317,7 @@ def discover(client: Client, cfg: Settings, subject: dict, year: int):
         return "unavailable", [], f"HTTP {r.status_code}"
 
     code, yy = subject["code"], f"{year % 100:02d}"
+    # e.g. 9702-s23-qp-11.php  /  9702-s23-er.php
     pattern = re.compile(rf"{code}-([msw])(\d\d)-([a-z]+)(?:-(\d+))?\.php")
     found = set()
     for sess, y2, typ, num in pattern.findall(r.text):
@@ -428,8 +343,6 @@ class Task:
 
 
 def build_plan(client: Client, cfg: Settings, subjects: list):
-    """Look up every subject/year in parallel. Returns (tasks, network_errors), where
-    network_errors counts the subject-years whose page couldn't be reached at all."""
     jobs = [(s, y) for s in subjects for y in subject_years(s)]
     log(f"\nChecking the site for what exists ({len(jobs)} subject-years)...")
     results = {}
@@ -489,17 +402,14 @@ def build_plan(client: Client, cfg: Settings, subjects: list):
     return tasks, network_errors
 
 
-# ---------------------------------------------------------------------
-# Downloading (parallel, safe writes)
-# ---------------------------------------------------------------------
 class RunState:
     def __init__(self, total: int):
         self.lock = threading.Lock()
         self.total = total
         self.done = 0
         self.ok = []
-        self.missing = []            # listed on the page but 404 on the server
-        self.failed = []             # (task, detail)
+        self.missing = []
+        self.failed = []
         self.consecutive = 0
         self.blocked = False
 
@@ -518,10 +428,8 @@ def do_task(client: Client, cfg: Settings, task: Task, state: RunState) -> None:
             os.makedirs(os.path.dirname(task.path), exist_ok=True)
             with open(tmp, "wb") as f:
                 f.write(r.content)
-            os.replace(tmp, task.path)       # only now does the file "exist"
+            os.replace(tmp, task.path)  # write to .part first so we never keep half a file
         except OSError as e:
-            # disk full, no permission, or (Windows) the PDF is open in a viewer.
-            # Not the site's fault, so it doesn't count towards "blocked".
             try:
                 os.remove(tmp)
             except OSError:
@@ -540,10 +448,11 @@ def do_task(client: Client, cfg: Settings, task: Task, state: RunState) -> None:
             n = state.done
         log(f"[{n}/{state.total}] OK       {label}")
     elif r is not None and r.status_code == 404:
+        # listed on the page but not actually there, happens sometimes
         with state.lock:
             state.done += 1
             state.missing.append(task)
-            state.consecutive = 0            # the server answered normally, so not blocked
+            state.consecutive = 0
             n = state.done
         log(f"[{n}/{state.total}] MISSING  {label} (listed, but the server says 404)")
     else:
@@ -564,7 +473,6 @@ def do_task(client: Client, cfg: Settings, task: Task, state: RunState) -> None:
 
 
 def download_all(client: Client, cfg: Settings, tasks: list):
-    """Download every task that isn't on disk yet. Returns (state, interrupted)."""
     need = [t for t in tasks if not t.have]
     state = RunState(len(need))
     if not need:
@@ -577,7 +485,7 @@ def download_all(client: Client, cfg: Settings, tasks: list):
     try:
         for fut in as_completed(futures):
             try:
-                fut.result()                 # surfaces any unexpected error from a worker
+                fut.result()
             except Exception as e:
                 log(f"[ERROR]   a download crashed unexpectedly: {type(e).__name__}: {e}")
     except KeyboardInterrupt:
@@ -599,9 +507,6 @@ def write_links_file(cfg: Settings, urls: list, name: str) -> str:
     return out
 
 
-# ---------------------------------------------------------------------
-# Compiling (split into several PDFs so memory and file size stay sane)
-# ---------------------------------------------------------------------
 def collect_files(cfg: Settings, subject: dict) -> list:
     code = subject["code"]
     pattern = re.compile(rf"^{code}_([msw])(\d\d)_([a-z]+)(?:_(\d+))?\.pdf$")
@@ -665,8 +570,6 @@ def write_compiled_part(cfg: Settings, subject: dict, part: list) -> Optional[st
 
 
 def compile_subject(cfg: Settings, subject: dict) -> list:
-    """Merge a subject's downloaded PDFs into bookmarked PDFs (Year > Session > file).
-    Splits into several PDFs (on year boundaries) if there are too many files."""
     files = collect_files(cfg, subject)
     if not files:
         log(f"[COMPILE] {subject['name']} {subject['code']}: nothing downloaded to compile.")
@@ -685,11 +588,10 @@ def compile_subject(cfg: Settings, subject: dict) -> list:
 
 
 def open_path(path: str) -> None:
-    """Open a file/folder with the system default app (Windows, macOS, Linux)."""
     try:
         system = platform.system()
         if system == "Windows":
-            os.startfile(path)  # type: ignore[attr-defined]
+            os.startfile(path)
         elif system == "Darwin":
             subprocess.run(["open", path])
         else:
@@ -698,11 +600,7 @@ def open_path(path: str) -> None:
         log(f"[OPEN] Couldn't open {path}: {e}")
 
 
-# ---------------------------------------------------------------------
-# Input parsing helpers
-# ---------------------------------------------------------------------
 def parse_number_list(text: str, max_n: int, allow_all: bool = True):
-    """'1,3' / '2-4' / 'a' (= all) -> sorted list within 1..max_n, or None if invalid."""
     text = text.strip().lower()
     if allow_all and text in ("a", "all", "*"):
         return list(range(1, max_n + 1))
@@ -723,7 +621,6 @@ def parse_number_list(text: str, max_n: int, allow_all: bool = True):
 
 
 def parse_years(text: str, lo: int, hi: int):
-    """'' = all, '2023', '2019-2024', '2019,2021,2023' -> list of years, or None if invalid."""
     text = text.strip()
     if not text:
         return list(range(lo, hi + 1))
@@ -743,7 +640,6 @@ def parse_years(text: str, lo: int, hi: int):
 
 
 def parse_int_csv(text: str):
-    """'31,32,3' -> [31, 32, 3]; '' -> []; invalid -> None."""
     text = text.replace(" ", "").strip(",")
     if not text:
         return []
@@ -751,10 +647,7 @@ def parse_int_csv(text: str):
     return [int(p) for p in parts] if all(p.isdigit() for p in parts) else None
 
 
-# ---------------------------------------------------------------------
-# Interactive questions (asked in this order)
-# ---------------------------------------------------------------------
-LEVELS = [          # (key, label) like the other menus: the KEY is what gets used in web addresses
+LEVELS = [
     ("cambridge-international-a-level", "A Level / AS Level"),
     ("cambridge-igcse", "IGCSE (includes the 9-1 versions)"),
     ("cambridge-o-level", "O Level"),
@@ -790,7 +683,6 @@ def ask_yes_no(prompt: str, default: bool = True) -> bool:
 
 
 def ask_menu(title: str, options: list, default: str, multi: bool = False):
-    """Show a numbered menu. Returns the chosen key (or list of keys when multi=True)."""
     print(f"\n{title}")
     for i, (_, label) in enumerate(options, 1):
         print(f"  {i}. {label}")
@@ -804,11 +696,7 @@ def ask_menu(title: str, options: list, default: str, multi: bool = False):
 
 
 def parse_subject_list(html: str, level_key: str) -> list:
-    """Find subject links on a level's page. The site uses RELATIVE links:
-         href="accounting-9706/index.php"                      (same level)
-         href="../cambridge-igcse-9-1/accounting-0985/..."      (IGCSE 9-1 subjects)
-       and a few subjects link to an oddly named .php page instead of index.php, so any
-       'slug-1234/...' link counts. Absolute /exam/<level>/slug-1234/... links work too."""
+    # links look like "physics-9702/index.php" or "../cambridge-igcse-9-1/biology-0970/..."
     pattern = re.compile(r'href="(?:(?:\.\./|/exam/)(cambridge-[a-z0-9-]+)/)?([a-z0-9-]+?)-(\d{4})/[^"]*"')
     seen, subjects = set(), []
     for level, base, code in pattern.findall(html):
@@ -822,7 +710,6 @@ def parse_subject_list(html: str, level_key: str) -> list:
     return subjects
 
 
-# Built-in copy of the site's subject list, used only if the live list can't be loaded.
 FALLBACK_SUBJECTS = {
     "cambridge-international-a-level": [
         "accounting-9706", "applied-information-and-communication-technology-9713", "biology-9700",
@@ -872,9 +759,6 @@ def fallback_subjects(level_key: str) -> list:
 
 
 def load_subject_list(client: Client, cfg: Settings, level_key: str):
-    """Read the site's subject list for a level (IGCSE also lists its 9-1 subjects).
-    Returns (subjects, reason_if_it_failed)."""
-    # The page may redirect to another .php file; any 200 page that has subject links is fine.
     url = f"{cfg.site}/exam/{level_key}/index.php"
     r, err = client.get(url, lambda x: x.status_code == 200 and bool(parse_subject_list(x.text, level_key)),
                         [cfg.home, ""])
@@ -913,7 +797,7 @@ def choose_subjects(client: Client, cfg: Settings, level_key: str) -> list:
         a = input("Type subject number(s) (e.g. 5 or 5,9), a word to search (e.g. phys),\n"
                   "or a full address like physics-9702: ").strip()
         m = re.fullmatch(r"([a-z0-9-]+)-(\d{4})", a.lower())
-        if m:                                              # typed an address directly
+        if m:
             known = [s for s in subjects if s["slug"] == a.lower()]
             return known or [{"name": pretty_name(m.group(1)), "level": level_key,
                               "slug": a.lower(), "code": m.group(2)}]
@@ -930,17 +814,9 @@ def choose_subjects(client: Client, cfg: Settings, level_key: str) -> list:
 
 
 def run_questions(client: Client, cfg: Settings):
-    """Ask everything, fill in cfg, and return the list of subjects to process
-    (or None if the user picked the saved settings)."""
     print("=" * 60)
     print("  Past paper downloader")
     print("=" * 60)
-
-    start = ask_menu("What would you like to do?",
-                     [("choose", "Choose what to download now"),
-                      ("saved", "Use the saved settings in the script (SUBJECTS list)")], "1")
-    if start == "saved":
-        return None
 
     level_key = ask_menu("1) Which level?", LEVELS, "1")
 
@@ -1006,9 +882,6 @@ def run_questions(client: Client, cfg: Settings):
     return [{**s, "years": years, "compile": do_compile} for s in chosen]
 
 
-# ---------------------------------------------------------------------
-# Command line
-# ---------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Download (and optionally merge) Cambridge past papers from bestexamhelp.com. "
@@ -1082,9 +955,6 @@ def subjects_from_cli(parser, args) -> list:
     return out
 
 
-# ---------------------------------------------------------------------
-# Main flow
-# ---------------------------------------------------------------------
 def fmt_minutes(seconds: float) -> str:
     return "under a minute" if seconds < 60 else f"about {round(seconds / 60)} min"
 
@@ -1200,10 +1070,6 @@ def main(argv=None) -> int:
         return 130
 
 
-# ---------------------------------------------------------------------
-# Built-in self-test (python download_papers.py --self-test)
-# Runs against a tiny fake website on your own computer, no internet needed.
-# ---------------------------------------------------------------------
 def run_self_test() -> int:
     import http.server
     import shutil
@@ -1216,7 +1082,7 @@ def run_self_test() -> int:
     GOOD_PDF = b"%PDF-1.4\n" + b"x" * 600 + b"\n%%EOF\n"
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        routes = {}                      # path -> (status, content_type, body, claimed_length)
+        routes = {}
 
         def log_message(self, *a):
             pass
@@ -1273,7 +1139,6 @@ def run_self_test() -> int:
             self.assertFalse(paper_wanted(cfg, 42))
 
         def test_subject_list_parsing(self):
-            # real link shapes copied from the site (relative links, ../ links, odd .php targets)
             html = ('<a href="/exam/cambridge-igcse/index.php">IGCSE</a>'
                     '<a href="accounting-0452/index.php">Accounting</a>'
                     '<a href="../cambridge-igcse-9-1/accounting-0985/index.php">Accounting 9-1</a>'
@@ -1292,12 +1157,11 @@ def run_self_test() -> int:
         def test_fallback_list_matches_site(self):
             counts = {k: len(fallback_subjects(k)) for k in LEVEL_CODES.values()}
             self.assertEqual(counts["cambridge-international-a-level"], 20)
-            self.assertEqual(counts["cambridge-igcse"], 53)          # 35 IGCSE + 18 (9-1)
+            self.assertEqual(counts["cambridge-igcse"], 53)
             self.assertEqual(counts["cambridge-o-level"], 17)
             self.assertIn("physics-9702", [s["slug"] for s in fallback_subjects("cambridge-international-a-level")])
 
         def run_flow(self, routes, answers):
-            """Run the question flow with a fake keyboard; returns (subjects, cfg, text printed)."""
             from unittest import mock
             Handler.routes = routes
             cfg = self.cfg("q", base_dir=os.path.join(self.tmp, "q"))
@@ -1309,11 +1173,9 @@ def run_self_test() -> int:
             return subjects, cfg, "\n".join(printed)
 
         def test_question_flow_live_list(self):
-            """First question is the level, it shows readable names, and the level KEY (not the
-            label) is what's used to load the subject list."""
             routes = {"/exam/cambridge-international-a-level/index.php":
                       (200, "text/html", b'<a href="test-1234/index.php">Test</a>', None)}
-            subjects, cfg, shown = self.run_flow(routes, ["1", "1", "1", "2023", "a", "1,2", "", "n",
+            subjects, cfg, shown = self.run_flow(routes, ["1", "1", "2023", "a", "1,2", "", "n",
                                                           os.path.join(self.tmp, "q_save")])
             self.assertIn("A Level / AS Level", shown)
             self.assertEqual(subjects[0]["slug"], "test-1234")
@@ -1324,14 +1186,12 @@ def run_self_test() -> int:
             self.assertFalse(subjects[0]["compile"])
 
         def test_question_flow_fallback_list_and_search(self):
-            """Live list unavailable -> built-in list; searching by word works for every level."""
             for level_answer, word, expect_slug, expect_level in (
                     ("1", "phys", "physics-9702", "cambridge-international-a-level"),
                     ("2", "chem", "chemistry-0620", "cambridge-igcse"),
                     ("3", "stat", "statistics-4040", "cambridge-o-level")):
-                # the numbers in the list never change when you search, so pick by the real number
                 number = [s["slug"] for s in fallback_subjects(expect_level)].index(expect_slug) + 1
-                subjects, _, shown = self.run_flow({}, ["1", level_answer, word, str(number), "2023", "a", "1,2", "", "n", ""])
+                subjects, _, shown = self.run_flow({}, [level_answer, word, str(number), "2023", "a", "1,2", "", "n", ""])
                 self.assertEqual(subjects[0]["slug"], expect_slug, shown[-300:])
                 self.assertEqual(subjects[0]["level"], expect_level)
 
@@ -1340,9 +1200,9 @@ def run_self_test() -> int:
                 status_code = 200
                 headers = {"Content-Length": "100"}
                 content = b"%PDF" + b"x" * 50
-            self.assertFalse(pdf_complete(R))                      # cut off
+            self.assertFalse(pdf_complete(R))
             R.headers = {}
-            self.assertFalse(pdf_complete(R))                      # no %%EOF
+            self.assertFalse(pdf_complete(R))
             R.content = GOOD_PDF
             self.assertTrue(pdf_complete(R))
             p = os.path.join(self.tmp, "t.pdf")
@@ -1370,7 +1230,7 @@ def run_self_test() -> int:
                 base: (200, "text/html",
                        listing(2023, ["s23-qp-11", "s23-ms-11", "s23-qp-12", "s23-qp-13", "s23-qp-21", "s23-er"]), None),
                 base + "1234_s23_qp_11.pdf": (200, "application/pdf", GOOD_PDF, None),
-                base + "1234_s23_ms_11.pdf": (200, "application/pdf", GOOD_PDF[:100], len(GOOD_PDF)),  # cut off
+                base + "1234_s23_ms_11.pdf": (200, "application/pdf", GOOD_PDF[:100], len(GOOD_PDF)),
                 base + "1234_s23_er.pdf": (200, "application/pdf", GOOD_PDF, None),
             }
             cfg = self.cfg("dl")
@@ -1379,12 +1239,11 @@ def run_self_test() -> int:
             self.assertEqual(len(tasks), 6)
             state, _ = download_all(client, cfg, tasks)
             self.assertEqual(len(state.ok), 2)
-            self.assertEqual(len(state.missing), 3)             # three 404s in a row ...
-            self.assertFalse(state.blocked)                      # ... must NOT count as a block
-            self.assertEqual(len(state.failed), 1)               # the cut-off file
+            self.assertEqual(len(state.missing), 3)
+            self.assertFalse(state.blocked)
+            self.assertEqual(len(state.failed), 1)
             folder = os.path.join(cfg.output_dir, "Test 1234", "2023")
             self.assertEqual(sorted(os.listdir(folder)), ["1234_s23_er.pdf", "1234_s23_qp_11.pdf"])
-            # second run only wants the files still missing, and the plan sees the good ones on disk
             tasks2, _ = build_plan(client, cfg, [self.subject])
             self.assertEqual(sum(1 for t in tasks2 if t.have), 2)
 
@@ -1399,12 +1258,10 @@ def run_self_test() -> int:
             tasks, _ = build_plan(client, cfg, [self.subject])
             state, _ = download_all(client, cfg, tasks)
             self.assertTrue(state.blocked)
-            self.assertLess(len(state.failed), len(tasks))       # it stopped instead of trying everything
+            self.assertLess(len(state.failed), len(tasks))
             self.assertEqual(len(state.ok), 0)
 
         def test_save_error_is_reported_not_lost(self):
-            """A file that downloads fine but can't be saved is counted as FAILED (and kept for
-            failed_links.txt), doesn't count as 'blocked', and leaves no .part file behind."""
             from unittest import mock
             base = "/exam/lvl/test-1234/2023/"
             Handler.routes = {
@@ -1422,9 +1279,8 @@ def run_self_test() -> int:
             self.assertFalse(os.path.exists(tasks[0].path + ".part"))
 
         def test_unreachable_site_is_an_error(self):
-            """If the site can't be reached at all, say so and exit with 1 (not 'nothing to do')."""
             from unittest import mock
-            cfg = self.cfg("offline", site="http://127.0.0.1:9", retries=1)   # nothing listens on port 9
+            cfg = self.cfg("offline", site="http://127.0.0.1:9", retries=1)
             printed = []
             with mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
                 code = execute(cfg, Client(cfg), [self.subject])
@@ -1434,26 +1290,18 @@ def run_self_test() -> int:
             self.assertNotIn("Nothing to download", text)
 
         def test_404_resets_block_streak(self):
-            """fail, 404, fail, 404, ... must never trip the 'blocked' stop."""
             base = "/exam/lvl/test-1234/2023/"
             names = ["s23-qp-11", "s23-qp-12", "s23-qp-13", "s23-qp-21", "s23-qp-22", "s23-qp-23"]
             Handler.routes = {base: (200, "text/html", listing(2023, names), None)}
             for i, n in enumerate(names):
-                if i % 2 == 0:                     # every other file answers with an HTML page
+                if i % 2 == 0:
                     Handler.routes[base + "1234_" + n.replace("-", "_") + ".pdf"] = (200, "text/html", b"blocked", None)
-            cfg = self.cfg("streak", workers=1)    # one at a time, so the order is fixed
+            cfg = self.cfg("streak", workers=1)
             client = Client(cfg)
             tasks, _ = build_plan(client, cfg, [self.subject])
             state, _ = download_all(client, cfg, tasks)
             self.assertFalse(state.blocked)
             self.assertEqual((len(state.failed), len(state.missing)), (3, 3))
-
-        def test_saved_settings_choice(self):
-            """Picking 'saved settings' on the first question returns None (main then uses SUBJECTS)."""
-            from unittest import mock
-            cfg = self.cfg("saved")
-            with mock.patch("builtins.input", lambda *_: "2"), mock.patch("builtins.print", lambda *a, **k: None):
-                self.assertIsNone(run_questions(Client(cfg), cfg))
 
         def test_years_respect_lower_limit(self):
             self.assertIsNone(parse_years("2010", 2015, 2026))
@@ -1485,7 +1333,6 @@ if __name__ == "__main__":
     try:
         exit_code = main()
     finally:
-        # keep the window open when the script was double-clicked on Windows
         if os.name == "nt" and len(sys.argv) == 1 and sys.stdin and sys.stdin.isatty():
             try:
                 input("\nPress Enter to close...")
