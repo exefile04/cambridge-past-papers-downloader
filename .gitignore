@@ -1,0 +1,19 @@
+# Downloaded and generated files (don't upload papers to GitHub)
+papers/
+compiled version/
+failed_links.txt
+debug_subject_page.html
+*.part
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
