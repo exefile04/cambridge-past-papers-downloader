@@ -1,3 +1,4 @@
+# by exefile04 - github.com/exefile04/cambridge-past-papers-downloader
 # download_papers.py
 # grabs cambridge past papers from bestexamhelp.com and (optionally) merges them into one pdf
 #

@@ -32,7 +32,7 @@ pip install requests pypdf
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-username>/cambridge-past-papers-downloader.git
+git clone https://github.com/exefile04/cambridge-past-papers-downloader.git
 cd cambridge-past-papers-downloader
 python download_papers.py
 ```
